@@ -161,7 +161,8 @@ async def on_day_chosen(query, day: str):
 
 
 async def on_city_chosen(query, day: str, city: str):
-    """Пользователь выбрал город — редактируем сообщение, показываем погоду."""
+    """Пользователь выбрал город — удаляем меню, отправляем прогноз новым сообщением, затем новое меню."""
+    # Убираем меню выбора города
     await query.edit_message_text(f"⏳ Получаю погоду для «{city}»...")
 
     try:
@@ -176,12 +177,17 @@ async def on_city_chosen(query, day: str, city: str):
         pogoda = get_weather(city_info["lat"], city_info["lon"])
         text = make_text(city_info["name"], pogoda, day)
 
-        # Кнопка «Назад» — вернуться к выбору города
-        back_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Выбрать другой город", callback_data=f"day:{day}")],
-            [InlineKeyboardButton("🏠 В начало", callback_data="home")],
-        ])
-        await query.edit_message_text(text, reply_markup=back_kb)
+        # Удаляем сообщение "⏳ Получаю погоду..."
+        await query.delete_message()
+
+        # Отправляем прогноз новым сообщением — оно остаётся навсегда
+        await query.message.chat.send_message(text)
+
+        # Отправляем новое меню выбора дня отдельным сообщением
+        await query.message.chat.send_message(
+            "На какой день показать погоду?",
+            reply_markup=day_keyboard()
+        )
 
     except Exception as e:
         await query.edit_message_text(
@@ -197,12 +203,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = query.data
 
-    if data == "home":
-        await query.edit_message_text(
-            "На какой день показать погоду?",
-            reply_markup=day_keyboard()
-        )
-    elif data.startswith("day:"):
+    if data.startswith("day:"):
         day = data.split(":")[1]
         await on_day_chosen(query, day)
     elif data.startswith("city:"):
