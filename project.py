@@ -1,8 +1,10 @@
 import json
+import os
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 
+from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -11,7 +13,12 @@ from telegram.ext import (
     ContextTypes,
 )
 
-TOKEN = "8786452529:AAHZcL2gc1E1jHQ2mUdHuirHoafKi9ZcOkQ"
+# Загружаем .env при локальном запуске (на Railway переменная задаётся в настройках)
+load_dotenv()
+
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не найден! Установи переменную окружения или создай .env файл")
 
 # список городов (кнопка -> поисковый запрос для геокодера)
 goroda = {
