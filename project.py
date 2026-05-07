@@ -49,27 +49,41 @@ goroda_list = [
 
 # ─── Избранное (shelve) ───────────────────────────────────────────────────────
 
-def get_favorite(user_id: int) -> str | None:
+def get_favorites(user_id: int) -> list:
+    """Возвращает список избранных городов (максимум 2)."""
     with shelve.open(DB_FILE) as db:
-        return db.get(str(user_id))
+        return db.get(str(user_id), [])
 
-def set_favorite(user_id: int, city: str):
+def add_favorite(user_id: int, city: str):
+    """Добавляет город в избранное (максимум 2)."""
     with shelve.open(DB_FILE) as db:
-        db[str(user_id)] = city
+        favorites = db.get(str(user_id), [])
+        if city not in favorites:
+            favorites.append(city)
+            if len(favorites) > 2:
+                favorites = favorites[-2:]  # оставляем последние 2
+        db[str(user_id)] = favorites
 
-def remove_favorite(user_id: int):
+def remove_favorite(user_id: int, city: str):
+    """Удаляет конкретный город из избранного."""
     with shelve.open(DB_FILE) as db:
-        db.pop(str(user_id), None)
+        favorites = db.get(str(user_id), [])
+        if city in favorites:
+            favorites.remove(city)
+        if favorites:
+            db[str(user_id)] = favorites
+        else:
+            db.pop(str(user_id), None)  # если список пуст — удаляем запись
 
 def get_all_favorites() -> dict:
-    """Возвращает {user_id: city} для всех пользователей с избранным."""
+    """Возвращает {user_id: [cities]} для всех пользователей с избранным."""
     with shelve.open(DB_FILE) as db:
         return dict(db)
 
 # ─── Клавиатуры ──────────────────────────────────────────────────────────────
 
 def city_keyboard(user_id: int):
-    """Список городов + кнопка избранного внизу."""
+    """Список городов + избранные внизу."""
     rows = []
     row = []
     for city in goroda_list:
@@ -80,23 +94,29 @@ def city_keyboard(user_id: int):
     if row:
         rows.append(row)
 
-    fav = get_favorite(user_id)
-    if fav:
-        rows.append([InlineKeyboardButton(f"⭐️ {fav} (избранное)", callback_data=f"city:{fav}")])
-        rows.append([InlineKeyboardButton("❌ Убрать из избранного", callback_data="fav:remove")])
+    favorites = get_favorites(user_id)
+    if favorites:
+        fav_row = []
+        for city in favorites:
+            fav_row.append(InlineKeyboardButton(f"⭐️ {city}", callback_data=f"city:{city}"))
+        rows.append(fav_row)
+        rows.append([InlineKeyboardButton("ℹ️ Нажми ❌ у города чтобы убрать из избранного", callback_data="noop")])
     else:
-        rows.append([InlineKeyboardButton("ℹ️ Нажми ⭐️ у города чтобы добавить в избранное", callback_data="noop")])
+        rows.append([InlineKeyboardButton("ℹ️ Нажми ⭐️ у города чтобы добавить (макс. 2)", callback_data="noop")])
 
     return InlineKeyboardMarkup(rows)
 
 
 def day_keyboard(city: str, user_id: int):
     """Выбор дня + кнопка добавить/убрать избранное."""
-    fav = get_favorite(user_id)
-    if fav == city:
-        fav_btn = InlineKeyboardButton("❌ Убрать из избранного", callback_data=f"fav:remove")
+    favorites = get_favorites(user_id)
+    if city in favorites:
+        fav_btn = InlineKeyboardButton("❌ Убрать из избранного", callback_data=f"fav:remove:{city}")
     else:
-        fav_btn = InlineKeyboardButton("⭐️ В избранное", callback_data=f"fav:add:{city}")
+        if len(favorites) >= 2:
+            fav_btn = InlineKeyboardButton("⭐️ Избранное заполнено (макс. 2)", callback_data="noop")
+        else:
+            fav_btn = InlineKeyboardButton("⭐️ В избранное", callback_data=f"fav:add:{city}")
 
     return InlineKeyboardMarkup([
         [
@@ -204,10 +224,12 @@ def make_text(city_name, pogoda, day: str):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    fav = get_favorite(user_id)
-    text = "Привет! Выбери населённый пункт:"
-    if fav:
-        text = f"Привет! Твоё избранное: ⭐️ {fav}\n\nВыбери населённый пункт:"
+    favorites = get_favorites(user_id)
+    if favorites:
+        fav_text = ", ".join([f"⭐️ {c}" for c in favorites])
+        text = f"Привет! Твоё избранное: {fav_text}\n\nВыбери населённый пункт:"
+    else:
+        text = "Привет! Выбери населённый пункт:"
     await update.message.reply_text(text, reply_markup=city_keyboard(user_id))
 
 
@@ -221,29 +243,39 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif data == "back:cities":
-        fav  = get_favorite(user_id)
-        text = f"Твоё избранное: ⭐️ {fav}\n\nВыбери населённый пункт:" if fav else "Выбери населённый пункт:"
+        favorites = get_favorites(user_id)
+        if favorites:
+            fav_text = ", ".join([f"⭐️ {c}" for c in favorites])
+            text = f"Твоё избранное: {fav_text}\n\nВыбери населённый пункт:"
+        else:
+            text = "Выбери населённый пункт:"
         await query.edit_message_text(text, reply_markup=city_keyboard(user_id))
 
     elif data.startswith("fav:add:"):
         city = data.split(":", 2)[2]
-        set_favorite(user_id, city)
+        add_favorite(user_id, city)
+        favorites = get_favorites(user_id)
+        fav_text = ", ".join([f"⭐️ {c}" for c in favorites])
         await query.edit_message_text(
-            f"⭐️ {city} добавлен в избранное!\n\nКаждый день в 00:00 буду присылать погоду на сегодня.\n\nНа какой день показать погоду?",
+            f"⭐️ {city} добавлен в избранное!\n\nТвоё избранное: {fav_text}\n\nКаждый день в 00:00 буду присылать погоду на сегодня.\n\nНа какой день показать погоду?",
             reply_markup=day_keyboard(city, user_id)
         )
 
-    elif data == "fav:remove":
-        remove_favorite(user_id)
-        await query.edit_message_text(
-            "Избранное удалено.\n\nВыбери населённый пункт:",
-            reply_markup=city_keyboard(user_id)
-        )
+    elif data.startswith("fav:remove:"):
+        city = data.split(":", 2)[2]
+        remove_favorite(user_id, city)
+        favorites = get_favorites(user_id)
+        if favorites:
+            fav_text = ", ".join([f"⭐️ {c}" for c in favorites])
+            text = f"❌ {city} удалён из избранного.\n\nТвоё избранное: {fav_text}\n\nВыбери населённый пункт:"
+        else:
+            text = "❌ Избранное удалено.\n\nВыбери населённый пункт:"
+        await query.edit_message_text(text, reply_markup=city_keyboard(user_id))
 
     elif data.startswith("city:"):
         city = data.split(":", 1)[1]
-        fav  = get_favorite(user_id)
-        fav_note = f"\n⭐️ Это твоё избранное" if fav == city else ""
+        favorites = get_favorites(user_id)
+        fav_note = f"\n⭐️ Это в твоём избранном" if city in favorites else ""
         await query.edit_message_text(
             f"📍 {city}{fav_note}\n\nНа какой день показать погоду?",
             reply_markup=day_keyboard(city, user_id)
@@ -261,8 +293,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text   = make_text(city_info["name"], pogoda, day)
             await query.delete_message()
             await query.message.chat.send_message(text)
-            fav  = get_favorite(user_id)
-            note = f"Твоё избранное: ⭐️ {fav}\n\n" if fav else ""
+            favorites = get_favorites(user_id)
+            if favorites:
+                fav_text = ", ".join([f"⭐️ {c}" for c in favorites])
+                note = f"Твоё избранное: {fav_text}\n\n"
+            else:
+                note = ""
             await query.message.chat.send_message(
                 f"{note}Выбери населённый пункт:",
                 reply_markup=city_keyboard(user_id)
@@ -276,17 +312,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def daily_forecast(context: ContextTypes.DEFAULT_TYPE):
     """Отправляет погоду на сегодня всем у кого есть избранное."""
     favorites = get_all_favorites()
-    for user_id_str, city in favorites.items():
-        try:
-            city_info = get_coord(city)
-            if city_info is None:
-                continue
-            pogoda = get_weather(city_info["lat"], city_info["lon"])
-            text   = "⭐️ Доброе утро! Погода на сегодня для твоего избранного:\n\n"
-            text  += make_text(city_info["name"], pogoda, "today")
-            await context.bot.send_message(chat_id=int(user_id_str), text=text)
-        except Exception:
-            pass  # пользователь мог заблокировать бота — пропускаем
+    for user_id_str, cities in favorites.items():
+        for city in cities:
+            try:
+                city_info = get_coord(city)
+                if city_info is None:
+                    continue
+                pogoda = get_weather(city_info["lat"], city_info["lon"])
+                text   = f"⭐️ Доброе утро! Погода на сегодня для {city}:\n\n"
+                text  += make_text(city_info["name"], pogoda, "today")
+                await context.bot.send_message(chat_id=int(user_id_str), text=text)
+            except Exception:
+                pass  # пользователь мог заблокировать бота — пропускаем
 
 
 def main():
